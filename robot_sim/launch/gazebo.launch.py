@@ -20,7 +20,7 @@ def _launch(context):
         if world.suffix != '.sdf':
             world = world.with_suffix('.sdf')
     if not world.is_file():
-        raise RuntimeError(f'World not found: {world_arg}. Use demo, empty, or an SDF path.')
+        raise RuntimeError(f'World not found: {world_arg}. Use small_room or an SDF path.')
     root = ET.parse(world).getroot()
     if root.find('world') is None:
         raise RuntimeError(f'{world} must contain an SDF <world>.')
@@ -40,7 +40,7 @@ def _launch(context):
 
 def generate_launch_description():
     return LaunchDescription([
-        DeclareLaunchArgument('world', default_value='demo',
+        DeclareLaunchArgument('world', default_value='small_room',
                               description='Bundled world name or path to an SDF world'),
         DeclareLaunchArgument('headless', default_value='false', choices=['true', 'false'],
                               description='Server only with EGL sensor rendering'),

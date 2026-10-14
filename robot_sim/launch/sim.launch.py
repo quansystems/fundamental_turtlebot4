@@ -22,7 +22,7 @@ def generate_launch_description():
             launch_arguments={name: LaunchConfiguration(name) for name in names}.items())
 
     return LaunchDescription([
-        DeclareLaunchArgument('world', default_value='demo'),
+        DeclareLaunchArgument('world', default_value='small_room'),
         DeclareLaunchArgument('headless', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('rviz', default_value='false', choices=['true', 'false']),
         DeclareLaunchArgument('enable_camera', default_value='true', choices=['true', 'false'],

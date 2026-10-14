@@ -11,8 +11,8 @@ Turtlebot4/
 │   ├── launch/        # display.launch.py
 │   └── rviz/
 ├── robot_sim/
-│   ├── worlds/        # World demo và empty
-│   ├── maps/          # Map mẫu của world demo
+│   ├── worlds/        # World small_room
+│   ├── maps/          # demo.yaml và demo.pgm tương ứng với small_room
 │   ├── config/        # bridge_config.yaml, demo_layout.yaml
 │   ├── launch/        # sim, gazebo, spawn, bridge
 │   └── scripts/
@@ -57,30 +57,91 @@ sudo apt install git python3-colcon-common-extensions python3-yaml \
 ```
 
 ```bash
-mkdir -p ~/workspaces/turtlebot4_ws
-cd ~/workspaces/turtlebot4_ws
-git clone https://github.com/TNSang25/Turtlebot4.git src
+mkdir -p ~/turtle
+cd ~/turtle
+git clone https://github.com/quansystems/fundamental_turtlebot4.git src/Turtlebot4
 ```
 
-## 3. Các bước chạy
+Build workspace (chạy lại sau khi sửa mã nguồn hoặc world):
+
+```bash
+cd ~/turtle
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install
+source install/setup.bash
+```
+
+## 3. Khảo sát small_room với map demo.pgm
+
+Map server nhận **demo.yaml**, file này tham chiếu ảnh **demo.pgm** cùng thư
+mục. Dùng map có sẵn thì không cần chạy mapping. World và map nằm tại
+`src/Turtlebot4/robot_sim/worlds/small_room.sdf` và
+`src/Turtlebot4/robot_sim/maps/demo.yaml`.
+
+Mở 3 terminal; trong **mỗi terminal**, chạy:
+
+```bash
+cd ~/turtle
+source /opt/ros/humble/setup.bash
+source install/setup.bash
+export ROS_DOMAIN_ID=69
+export IGN_PARTITION=turtle_small_room
+```
+
+Terminal 1 — Gazebo và robot, spawn tại (0, 0), yaw = 0:
+
+```bash
+ros2 launch robot_sim sim.launch.py world:=small_room enable_camera:=true
+```
+
+Terminal 2 — Map, AMCL và RViz; khởi tạo pose trùng vị trí spawn:
+
+```bash
+ros2 launch robot_navigation localization.launch.py \
+  map:=$PWD/src/Turtlebot4/robot_sim/maps/demo.yaml \
+  set_initial_pose:=true initial_pose_x:=0.0 initial_pose_y:=0.0 initial_pose_yaw:=0.0
+```
+
+Terminal 3 — Navigation:
+
+```bash
+ros2 launch robot_navigation navigation.launch.py
+```
+
+Đợi Nav2 active, sau đó chọn **Nav2 Goal** trong RViz và đặt đích ở vùng
+trống. RViz dùng Fixed Frame `map`. Nếu đổi vị trí spawn, đổi initial pose
+cho tương ứng hoặc dùng **2D Pose Estimate**.
+
+Kiểm tra mô phỏng ở terminal khác đã source môi trường như trên:
+
+```bash
+ros2 run robot_sim smoke_test.py --camera
+ros2 run tf2_ros tf2_echo map base_link
+```
+
+Để điều khiển thủ công, dừng navigation rồi chạy
+`ros2 run robot_node teleop_keyboard`. Dừng các launch bằng `Ctrl+C`.
+
+## 4. Mapping lại và dùng map tự tạo
 
 ### Chuẩn bị terminal
 
 Mở 4 terminal. Trong **mỗi terminal**, chạy:
 
 ```bash
-cd ~/workspaces/turtlebot4_ws
+cd ~/turtle
 source /opt/ros/humble/setup.bash
 source install/setup.bash
 export ROS_DOMAIN_ID=69
+export IGN_PARTITION=turtle_small_room
 ```
 
-Giữ terminal ở thư mục `turtlebot4_ws` để các đường dẫn `$PWD/src/...` đúng.
+Giữ terminal ở thư mục `~/turtle` để các đường dẫn `$PWD/src/Turtlebot4/...` đúng.
 
 ### Mở simulation — terminal 1
 
 ```bash
-ros2 launch robot_sim sim.launch.py enable_camera:=true
+ros2 launch robot_sim sim.launch.py world:=small_room enable_camera:=true
 ```
 
 ### Bước 1 — Mapping
@@ -110,7 +171,7 @@ Terminal 4 lưu map **khi mapping vẫn đang chạy**:
 
 ```bash
 ros2 launch robot_mapping save_map.launch.py \
-  map_name:=$PWD/src/robot_navigation/maps/my_map
+  map_name:=$PWD/src/Turtlebot4/robot_navigation/maps/my_map
 ```
 
 Sau khi lưu xong, `Ctrl+C` tắt **teleop và mapping**, giữ simulation.
@@ -121,7 +182,7 @@ Terminal 2:
 
 ```bash
 ros2 launch robot_navigation localization.launch.py \
-  map:=$PWD/src/robot_navigation/maps/my_map.yaml
+  map:=$PWD/src/Turtlebot4/robot_navigation/maps/my_map.yaml
 ```
 
 Launch mở map server, AMCL và RViz. Trong RViz:

@@ -1,0 +1,372 @@
+MÔ TẢ CHƯƠNG TRÌNH MÔ PHỎNG VÀ ĐIỀU HƯỚNG TURTLEBOT 4
+====================================================
+
+Phạm vi: workspace ~/turtle, ROS 2 Humble, Gazebo Fortress.
+Môi trường khảo sát: world small_room.sdf, bản đồ demo.yaml và demo.pgm.
+Nội dung dựa trên mã nguồn và cấu hình đang có trong workspace.
+
+1. CẤU TRÚC CHƯƠNG TRÌNH
+-----------------------
+
+~/turtle/
+├── src/Turtlebot4/
+│   ├── README.md
+│   ├── robot_description/
+│   │   ├── urdf/       Mô tả robot bằng URDF/Xacro và plugin mô phỏng.
+│   │   ├── meshes/     Hình học hiển thị TurtleBot 4 và Create 3.
+│   │   ├── config/     simulation.yaml: thông số bánh xe và cảm biến.
+│   │   ├── launch/     display.launch.py.
+│   │   └── rviz/       Cấu hình hiển thị mô hình robot.
+│   ├── robot_sim/
+│   │   ├── worlds/     small_room.sdf: phòng, tường và vật cản.
+│   │   ├── maps/       demo.yaml và ảnh bản đồ demo.pgm.
+│   │   ├── config/     bridge_config.yaml và layout demo cũ.
+│   │   ├── launch/     sim, gazebo, spawn và bridge.
+│   │   └── scripts/    Công cụ tạo world demo cũ và smoke_test.py.
+│   ├── robot_mapping/
+│   │   ├── config/     slam.yaml: cấu hình SLAM Toolbox.
+│   │   ├── launch/     mapping.launch.py, save_map.launch.py.
+│   │   └── rviz/       Cấu hình hiển thị khi xây dựng bản đồ.
+│   ├── robot_navigation/
+│   │   ├── config/     nav2.yaml: AMCL, costmap, planner, controller.
+│   │   ├── launch/     localization.launch.py, navigation.launch.py.
+│   │   ├── maps/       my_map.yaml và my_map.pgm dùng cho map tự lưu.
+│   │   └── rviz/       navigation.rviz.
+│   └── robot_node/
+│       ├── robot_node/ teleop_keyboard.py, velocity_filter.py, runtime.py.
+│       └── test/       Kiểm tra bộ xử lý vận tốc của teleop.
+├── build/              Sản phẩm trung gian khi build bằng colcon.
+├── install/            Các package đã build và file setup môi trường.
+└── log/                Log build và log kiểm tra mô phỏng.
+
+World SDF mô tả môi trường vật lý 3D trong Gazebo. Map PGM là bản đồ
+chiếm dụng 2D cho localization và navigation; YAML chứa cách đọc ảnh.
+Gazebo không đọc demo.pgm để dựng world. Vì vậy world và map phải có
+bố trí vật cản và hệ tọa độ tương ứng.
+
+demo.yaml hiện dùng:
+  image: demo.pgm
+  resolution: 0.05 m/ô
+  origin: [-3.02, -3.02, 0]
+  mode: trinary; negate: 0
+  occupied_thresh: 0.65; free_thresh: 0.196
+
+Ảnh demo.pgm có kích thước 121 x 121 pixel. Origin xác định gốc lưới
+bản đồ trong frame map, không phải vị trí spawn robot. Trong mode
+trinary, các ô được phân loại thành trống, có vật cản hoặc chưa biết
+dựa trên mức xám và các ngưỡng trong YAML.
+
+2. CÁC PACKAGE VÀ NODE CHÍNH
+---------------------------
+
+2.1. robot_description
+  Chứa mô hình TurtleBot 4, Create 3, bánh xe, lidar, camera và IMU.
+  robot_state_publisher đọc URDF và /joint_states để công bố TF giữa
+  các link. Các khớp cố định được công bố trên /tf_static.
+  URDF được tạo từ turtlebot4.urdf.xacro và phát trên /robot_description.
+
+2.2. robot_sim
+  sim.launch.py ghép ba bước: chạy Gazebo, spawn robot và mở bridge.
+  World mặc định là small_room; robot mặc định spawn tại x=0, y=0,
+  z=0.02 m, yaw=0 rad. Camera được bật mặc định.
+
+  Các thành phần chính:
+  - Gazebo: mô phỏng vật lý, môi trường và dữ liệu cảm biến.
+  - spawn_robot: executable create của ros_gz_sim, tạo robot từ
+    /robot_description; tiến trình kết thúc sau khi spawn thành công.
+  - robot_state_publisher: duy trì TF của mô hình robot.
+  - simulation_bridge: executable parameter_bridge của ros_gz_bridge,
+    chuyển dữ liệu giữa Gazebo Transport và ROS 2.
+  - Plugin DiffDrive trong Gazebo: nhận vận tốc, điều khiển bánh xe,
+    xuất odometry và TF odom -> base_link.
+
+  DiffDrive và các hệ thống cảm biến là plugin Gazebo, không phải các
+  ROS node độc lập do package này tự viết.
+
+2.3. robot_mapping
+  mapping.launch.py mở SLAM Toolbox theo chế độ online asynchronous.
+  Node slam_toolbox dùng lidar và TF để xây dựng bản đồ.
+  mapping_rviz hiển thị robot, scan và bản đồ đang cập nhật.
+  save_map.launch.py chạy map_saver_cli của nav2_map_server, lưu bản đồ
+  thành cặp YAML/PGM rồi kết thúc.
+
+2.4. robot_navigation
+  localization.launch.py mở:
+  - map_server: đọc YAML/PGM, công bố bản đồ tĩnh.
+  - amcl: ước lượng vị trí robot trên bản đồ có sẵn.
+  - lifecycle_manager_localization: cấu hình và kích hoạt hai node trên.
+  - localization_rviz: hiển thị map, robot, scan, hạt AMCL và navigation.
+
+  navigation.launch.py mở các node Nav2 từ nav2_bringup:
+  - planner_server: tính đường đi toàn cục.
+  - controller_server: chọn vận tốc để bám đường và tránh vật cản.
+  - smoother_server: cung cấp dịch vụ/action làm mượt đường đi.
+  - bt_navigator: điều phối nhiệm vụ bằng Behavior Tree.
+  - behavior_server: cung cấp hành vi quay, lùi, chờ và hỗ trợ điều khiển.
+  - waypoint_follower: thực hiện chuỗi waypoint khi được yêu cầu.
+  - velocity_smoother: làm mượt và giới hạn thay đổi lệnh vận tốc.
+  - lifecycle_manager_navigation: kích hoạt và giám sát các node Nav2.
+  - global_costmap và local_costmap: thành phần costmap phục vụ planner
+    và controller, xuất dữ liệu để RViz hiển thị.
+
+  Các node lifecycle phải ở trạng thái active mới thực hiện nhiệm vụ.
+  Localization và navigation được tách thành hai launch riêng.
+
+2.5. robot_node và RViz
+  teleop_keyboard phát /cmd_vel từ bàn phím. Mặc định: tiến/lùi
+  0.20 m/s, quay 0.80 rad/s, phát lệnh ở 20 Hz và dừng khi không nhận
+  phím trong 0.6 s. velocity_filter.py là mô-đun được teleop sử dụng,
+  không phải node độc lập.
+
+  RViz hiển thị dữ liệu ROS và gửi initial pose hoặc mục tiêu điều
+  hướng. Gazebo chịu trách nhiệm mô phỏng chuyển động vật lý.
+
+3. CÁC TOPIC CHÍNH
+------------------
+
+Các tên dưới đây áp dụng khi chạy mặc định, không thêm namespace.
+
+Topic                          Kiểu dữ liệu / vai trò
+
+/clock                         rosgraph_msgs/msg/Clock
+  Gazebo -> bridge -> ROS. Cấp thời gian mô phỏng cho use_sim_time=true.
+
+/robot_description             std_msgs/msg/String
+  robot_state_publisher công bố URDF cho spawn và RobotModel trong RViz.
+
+/joint_states                  sensor_msgs/msg/JointState
+  Gazebo -> bridge. Trạng thái khớp để robot_state_publisher cập nhật TF.
+
+/scan                          sensor_msgs/msg/LaserScan
+  Lidar -> bridge -> SLAM, AMCL, costmap và RViz.
+  Cấu hình: 640 mẫu/scan, 10 Hz, tầm đo 0.164 đến 12 m;
+  frame cảm biến là rplidar_link.
+
+/odom                          nav_msgs/msg/Odometry
+  DiffDrive -> bridge -> ROS. Pose và vận tốc tương đối trong frame odom,
+  child_frame_id=base_link; tần số cấu hình 50 Hz.
+
+/imu                           sensor_msgs/msg/Imu
+  IMU -> bridge -> ROS; frame imu_link, tần số cấu hình 62 Hz.
+  Cấu hình AMCL/SLAM hiện không trực tiếp dùng topic này làm đầu vào.
+
+/camera/image                  sensor_msgs/msg/Image
+/camera/depth_image            sensor_msgs/msg/Image
+/camera/camera_info            sensor_msgs/msg/CameraInfo
+  Ảnh RGB, ảnh chiều sâu và thông số camera từ Gazebo qua bridge.
+  Cấu hình ảnh 320 x 240, 30 Hz. Hệ thống điều hướng hiện dùng /scan
+  làm nguồn quan sát vật cản, chưa cấu hình camera cho costmap.
+
+/tf và /tf_static              tf2_msgs/msg/TFMessage
+  Mang quan hệ giữa các hệ tọa độ. Chuỗi chính:
+
+      map -> odom -> base_link -> rplidar_link / các link camera
+
+  map -> odom: SLAM Toolbox khi mapping, AMCL khi localization.
+  odom -> base_link: DiffDrive của Gazebo qua bridge.
+  base_link -> các link robot/cảm biến: robot_state_publisher.
+
+/map                           nav_msgs/msg/OccupancyGrid
+  SLAM Toolbox công bố khi mapping; map_server công bố khi localization.
+  Giá trị ô ROS thường là 0..100 cho mức chiếm dụng và -1 cho chưa biết.
+  RViz/map client dùng QoS Transient Local để nhận bản đồ đã phát trước đó.
+
+/initialpose                   geometry_msgs/msg/PoseWithCovarianceStamped
+  RViz 2D Pose Estimate -> AMCL. Gồm pose khởi tạo và độ bất định.
+
+/amcl_pose                     geometry_msgs/msg/PoseWithCovarianceStamped
+  AMCL công bố pose ước lượng trong frame map và ma trận covariance.
+
+/particle_cloud                nav2_msgs/msg/ParticleCloud
+  AMCL công bố tập hạt để RViz hiển thị phân bố giả thuyết vị trí.
+
+/global_costmap/costmap        nav_msgs/msg/OccupancyGrid
+/local_costmap/costmap         nav_msgs/msg/OccupancyGrid
+  Bản đồ chi phí toàn cục và cục bộ, gồm vật cản và vùng inflation.
+
+/plan và /local_plan           nav_msgs/msg/Path
+  /plan hiển thị đường toàn cục; /local_plan hiển thị quỹ đạo cục bộ
+  do DWB công bố trong cấu hình hiện tại.
+
+/cmd_vel_nav                   geometry_msgs/msg/Twist
+  Lệnh từ controller_server sau remap của nav2_bringup, đưa vào
+  velocity_smoother.
+
+/cmd_vel                       geometry_msgs/msg/Twist
+  Lệnh vận tốc cuối từ velocity_smoother hoặc teleop -> bridge ->
+  DiffDrive trong Gazebo. linear.x là tốc độ tiến/lùi, angular.z là
+  tốc độ quay. Không chạy teleop và navigation cùng điều khiển robot.
+
+Nav2 Goal trong RViz gửi yêu cầu tới action /navigate_to_pose
+(nav2_msgs/action/NavigateToPose). Đây là giao diện action có goal,
+feedback, result và khả năng hủy, không chỉ là một topic đích đơn lẻ.
+
+4. QUÁ TRÌNH XÂY DỰNG BẢN ĐỒ
+----------------------------
+
+4.1. Khởi động và thu dữ liệu
+  Chạy simulation để có robot, /scan, /odom, TF và /clock.
+  Chạy mapping.launch.py để mở SLAM Toolbox và RViz.
+  Điều khiển robot bằng teleop đi qua các khu vực trong small_room.
+  Cần có chuyển động tịnh tiến và scan chồng lấp; chỉ quay tại chỗ
+  có thể không tạo thêm nút đồ thị với cấu hình SLAM hiện tại.
+
+4.2. Ước lượng chuyển động và ghép scan
+  SLAM Toolbox dùng TF odom -> base_link làm dự đoán chuyển động,
+  rồi dùng scan matching để căn các lần quét lidar với dữ liệu trước.
+  TF base_link -> rplidar_link cho biết vị trí lắp lidar trên robot.
+  Các tia đo giúp xác định vùng trống và bề mặt vật cản.
+
+4.3. Tối ưu đồ thị và đóng vòng
+  Các pose và ràng buộc giữa scan tạo thành pose graph. Khi robot quay
+  lại một khu vực đã đi qua, loop closure bổ sung ràng buộc để giảm
+  sai lệch tích lũy. Cấu hình bật do_loop_closing và dùng CeresSolver
+  để tối ưu đồ thị.
+
+4.4. Xuất bản đồ và TF
+  SLAM cập nhật occupancy grid /map với độ phân giải 0.05 m/ô,
+  chu kỳ cập nhật cấu hình 1 s. Đồng thời công bố map -> odom để
+  hiệu chỉnh pose tương đối từ odometry sang hệ tọa độ bản đồ.
+
+4.5. Lưu và chuyển sang dùng bản đồ
+  Khi mapping vẫn chạy, map_saver_cli đọc /map và ghi my_map.pgm
+  cùng my_map.yaml. YAML chứa resolution, origin và ngưỡng phân loại.
+  Việc lưu YAML/PGM lưu occupancy map, không lưu toàn bộ pose graph
+  để tiếp tục một phiên SLAM sau này.
+
+  Sau khi lưu, dừng teleop và mapping, giữ simulation. Mở localization
+  với YAML vừa lưu. Không chạy SLAM mapping và AMCL cùng công bố
+  map -> odom trong quy trình này.
+
+  Với khảo sát hiện tại, demo.pgm đã có sẵn nên có thể bỏ qua bước
+  xây dựng bản đồ và chạy localization trực tiếp.
+
+5. QUÁ TRÌNH LOCALIZATION
+-------------------------
+
+5.1. Nạp bản đồ tĩnh
+  map_server đọc demo.yaml, mở demo.pgm và công bố /map. Bản đồ tĩnh
+  là dữ liệu tham chiếu; AMCL không xây dựng lại bản đồ trong bước này.
+
+5.2. Khởi tạo vị trí
+  AMCL cần pose ban đầu gần vị trí thật. Với robot spawn tại (0, 0),
+  yaw=0, có thể dùng set_initial_pose:=true và initial_pose bằng 0.
+  Hoặc chọn 2D Pose Estimate trong RViz để phát /initialpose.
+  Nếu đổi vị trí spawn, phải đổi initial pose tương ứng trên map.
+
+5.3. Lọc hạt AMCL
+  AMCL duy trì nhiều giả thuyết pose (x, y, yaw), gọi là các hạt.
+  Mô hình DifferentialMotionModel dự đoán sự thay đổi pose từ odometry.
+  Mô hình likelihood_field so sánh điểm cuối tia lidar với vị trí
+  vật cản trên map để đánh giá mức phù hợp của từng hạt.
+  Các hạt phù hợp được tăng trọng số và lấy mẫu lại. Số hạt được
+  điều chỉnh thích nghi trong giới hạn cấu hình 500 đến 2000.
+  Khi có đủ quan sát phù hợp, phân bố hạt tập trung quanh pose robot.
+
+5.4. Cấp pose cho hệ thống
+  AMCL xuất /amcl_pose, /particle_cloud và TF map -> odom.
+  Ghép với odom -> base_link sẽ có pose robot trong map cho Nav2.
+  Frame odom cung cấp chuyển động liên tục nhưng có thể tích lũy sai
+  số; frame map cung cấp tham chiếu toàn cục đã được hiệu chỉnh.
+
+5.5. Kiểm tra
+  Trong RViz đặt Fixed Frame=map, quan sát robot trên bản đồ và các
+  điểm /scan khớp tường/vật cản. Kiểm tra TF bằng:
+    ros2 run tf2_ros tf2_echo map base_link
+  Chỉ bắt đầu navigation khi map_server và AMCL active, TF hợp lệ.
+
+6. CÁCH NAV2 LẬP KẾ HOẠCH VÀ ĐIỀU KHIỂN TURTLEBOT 4
+--------------------------------------------------
+
+6.1. Nhận mục tiêu và điều phối
+  Người dùng đặt Nav2 Goal trong RViz. bt_navigator nhận action
+  NavigateToPose và chạy Behavior Tree để phối hợp planner, controller
+  và các hành vi phục hồi. Launch dùng Behavior Tree mặc định của
+  Nav2 Humble đã cài, có lập kế hoạch lại định kỳ khoảng 1 Hz.
+
+6.2. Xây dựng costmap
+  Global costmap dùng frame map và các lớp:
+  - static_layer: lấy vật cản từ bản đồ có sẵn.
+  - obstacle_layer: đánh dấu/xóa vật cản theo /scan.
+  - inflation_layer: tăng chi phí quanh vật cản để tạo khoảng cách tránh.
+
+  Local costmap dùng frame odom, là rolling window 3 x 3 m quanh
+  robot, gồm obstacle_layer và inflation_layer. Nó cập nhật theo
+  quan sát gần robot để hỗ trợ tránh vật cản khi đang di chuyển.
+
+  Hai costmap dùng resolution=0.05 m, robot_radius=0.18 m,
+  footprint_padding=0.02 m và inflation_radius=0.45 m.
+  Tần số cập nhật cấu hình: global 1 Hz, local 5 Hz.
+  Inflation biểu diễn chi phí tránh vật cản; không có nghĩa mọi ô
+  trong bán kính 0.45 m đều bị cấm đi qua.
+
+6.3. Lập đường đi toàn cục
+  planner_server dùng plugin nav2_navfn_planner/NavfnPlanner,
+  tên cấu hình GridBased. use_astar=false nên dùng cách tìm đường
+  dựa trên Dijkstra. Planner tìm đường từ pose hiện tại tới mục tiêu
+  trên global costmap và xuất /plan.
+  Khi dữ liệu chi phí hoặc mục tiêu thay đổi, Behavior Tree có thể
+  yêu cầu tính lại đường để controller tiếp tục bám đường mới.
+
+  smoother_server đã được khởi động với SimpleSmoother, nhưng Behavior
+  Tree mặc định đang dùng không có bước SmoothPath. Vì vậy không
+  mặc nhiên coi mọi đường toàn cục đã đi qua smoother_server.
+
+6.4. Chọn vận tốc bằng DWB
+  controller_server dùng dwb_core::DWBLocalPlanner, tên FollowPath,
+  và chạy vòng điều khiển cấu hình 20 Hz.
+  DWB lấy mẫu nhiều cặp vận tốc tiến và quay, mô phỏng các quỹ đạo
+  trong khoảng thời gian sim_time=1.7 s, kiểm tra chúng trên local
+  costmap rồi chấm điểm bằng các critic:
+  - BaseObstacle: chi phí vật cản trên quỹ đạo.
+  - PathAlign/PathDist: hướng và khoảng cách so với đường toàn cục.
+  - GoalAlign/GoalDist: hướng và khoảng cách so với đích.
+  - Oscillation: hạn chế dao động điều khiển.
+  - RotateToGoal: hỗ trợ quay về hướng cuối khi gần đích.
+
+  Controller chọn quỹ đạo hợp lệ có tổng chi phí thấp và phát vận tốc.
+  Cấu hình hiện tại cho phép tối đa 0.26 m/s, 1.0 rad/s;
+  không có vận tốc ngang vì TurtleBot 4 dùng truyền động vi sai.
+
+6.5. Làm mượt vận tốc và điều khiển bánh xe
+  Trong nav2_bringup, đầu ra controller được remap thành /cmd_vel_nav.
+  velocity_smoother nhận topic này, làm mượt ở 20 Hz và phát /cmd_vel.
+  Cấu hình feedback=OPEN_LOOP: bộ làm mượt dùng lệnh trước làm tham
+  chiếu, thay vì dùng odometry làm phản hồi vận tốc cho bước làm mượt.
+  Giới hạn gia tốc cấu hình là 0.5 m/s² và 1.5 rad/s².
+
+  Chuỗi điều khiển chính:
+    Nav2 Goal -> bt_navigator -> planner_server -> controller_server
+    -> /cmd_vel_nav -> velocity_smoother -> /cmd_vel
+    -> ros_gz_bridge -> DiffDrive Gazebo -> hai bánh xe.
+
+  Với v=linear.x, w=angular.z, khoảng cách bánh L=0.233 m và bán kính
+  bánh r=0.03575 m, quan hệ động học vi sai lý tưởng là:
+    omega_left  = (v - w*L/2) / r
+    omega_right = (v + w*L/2) / r
+  DiffDrive chuyển yêu cầu chuyển động thành điều khiển hai bánh và
+  xuất /odom cùng TF odom -> base_link để khép vòng thông tin điều hướng.
+
+6.6. Đạt đích và phục hồi
+  SimpleGoalChecker kiểm tra sai số vị trí/hướng cuối với tolerance
+  0.20 m và 0.20 rad. SimpleProgressChecker yêu cầu robot di chuyển
+  tối thiểu 0.20 m trong thời gian cho phép 15 s để phát hiện mất tiến độ.
+  Khi đạt đích, action trả thành công và robot dừng.
+
+  Khi planner/controller gặp lỗi, Behavior Tree có thể xóa costmap,
+  lập kế hoạch lại hoặc yêu cầu behavior_server quay, chờ và lùi.
+  Các hành vi phục hồi chỉ được gọi khi cây hành vi đi vào nhánh
+  tương ứng; chúng không chạy liên tục trong điều hướng bình thường.
+
+Tệp cấu hình để đối chiếu thông số:
+  robot_description/config/simulation.yaml
+  robot_description/urdf/turtlebot4.gazebo.xacro
+  robot_sim/config/bridge_config.yaml
+  robot_sim/maps/demo.yaml
+  robot_mapping/config/slam.yaml
+  robot_navigation/config/nav2.yaml
+  robot_navigation/launch/localization.launch.py
+  robot_navigation/launch/navigation.launch.py
+  /opt/ros/humble/share/nav2_bringup/launch/navigation_launch.py
+  /opt/ros/humble/share/nav2_bt_navigator/behavior_trees/
+    navigate_to_pose_w_replanning_and_recovery.xml
